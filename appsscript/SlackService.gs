@@ -37,6 +37,12 @@ function sendLeadershipSummaryToSlack() {
   const lastHash = props.getProperty("SLACK_LAST_HASH") || "";
   const cycle = settings.currentCycle || "Unknown Cycle";
 
+  // Hard guard: never post more than once per cycle regardless of re-runs or data changes.
+  if (typeof isSlackSentForCycle_ === "function" && isSlackSentForCycle_(cycle)) {
+    Logger.log("Skipped: Slack already sent for cycle '" + cycle + "'. Use closePulse/resetSlackFlag to re-enable.");
+    return;
+  }
+
   const extremes = computeExtremes_(rows);
   const lowestArea  = metrics.lowestArea  || extremes.lowestArea  || "Not available";
   const highestArea = metrics.highestArea || extremes.highestArea || "Not available";
@@ -67,6 +73,8 @@ function sendLeadershipSummaryToSlack() {
   // Must persist AFTER successful send to avoid stuck dedupe
   props.setProperty("SLACK_LAST_HASH", currentHash);
   props.setProperty("SLACK_LAST_SENT", now);
+  // Mark cycle as sent so no future pipeline run can post again for this cycle.
+  if (typeof markSlackSentForCycle_ === "function") markSlackSentForCycle_(cycle);
   resetApprovalFlag_();
 
   Logger.log("Sent to Slack for cycle: " + cycle);
@@ -122,31 +130,8 @@ function getSlackKeyMetrics_(rows, settings) {
   result.highestArea = extremes.highestArea || "";
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var formSheetName = (settings && settings.formSheetName) || PULSE_CONFIG.FORM_RESPONSE_SHEET;
-  var formSheet = ss.getSheetByName(formSheetName);
-  if (!formSheet || formSheet.getLastRow() < 2) return result;
-
-  var data = formSheet.getDataRange().getValues();
-  var headers = data[0] || [];
-  var cycleCol = -1;
-  for (var c = 0; c < headers.length; c++) {
-    var hn = normalizeLabel(headers[c]);
-    if (hn === "pulsecycle" || hn === "cycle") {
-      cycleCol = c;
-      break;
-    }
-  }
-
-  var count = 0;
-  var activeCycle = (settings && settings.currentCycle) ? safeText_(settings.currentCycle) : "";
-  for (var r = 1; r < data.length; r++) {
-    if (cycleCol >= 0 && activeCycle) {
-      if (safeText_(data[r][cycleCol]) === activeCycle) count++;
-    } else {
-      count++;
-    }
-  }
-  result.totalResponses = String(count);
+  var trends = typeof getTrends === "function" ? getTrends(ss) : [];
+  result.totalResponses = String(getActiveCycleResponseCount_(ss, settings, trends));
   return result;
 }
 

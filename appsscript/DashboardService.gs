@@ -20,8 +20,8 @@
  *                          col C+ = per-area scores (header row 1 matches AREA_NAMES)
  *   - Recommendation Themes col A = theme, col B = frequency, col C = action,
  *                          col D = pulses active (optional), col E = area link (optional)
- *   - Action Tracker       col A = concern, col B = action, col C = owner,
- *                          col D = status, col E = pulse opened, col F = area
+ *   - Action Tracker       col A = pulse opened, col B = area, col C = action,
+ *                          col D = owner, col E = status, col F = notes
  *   - Settings             key/value pairs: "Current Cycle", "Narrative Summary",
  *                          "Strong Threshold", "Stable Threshold", "Watch Threshold"
  *
@@ -39,6 +39,18 @@ var SHEET_ACTIONS         = "Action Tracker";
 var SHEET_ROLE_SPLIT      = "Role Split";      // optional: per-area scores by role group
 var SHEET_ROLE_SPLIT_SUMMARY = "Role Split Summary";
 var SHEET_AI_INSIGHTS     = "AI Insights";
+
+/**
+ * Reads the shared-secret auth token from Script Properties.
+ * Accepts either property name — DASHBOARD_API_TOKEN (documented name) or
+ * API_SHARED_SECRET (used by some deployments) — so setup doesn't silently
+ * break auth if a different name was used when configuring the property.
+ * Returns "" (falsy) when neither is set, which bypasses auth entirely.
+ */
+function getSharedSecretToken_() {
+  var props = PropertiesService.getScriptProperties();
+  return props.getProperty("DASHBOARD_API_TOKEN") || props.getProperty("API_SHARED_SECRET") || "";
+}
 
 // ── Default thresholds (overridden by Settings sheet if present) ─────────────
 var DEFAULT_THRESHOLD_STRONG = 4.0;
@@ -64,6 +76,7 @@ function onOpen() {
     .addSeparator()
     .addItem("Archive this pulse cycle (Read-only)", "archiveCurrentCycleTrend")
     .addItem("Validate sheet structure", "validateAndAlert")
+    .addItem("🔧 Rescue Action Tracker Layout", "migrateActionTrackerNow")
     .addToUi();
 }
 
@@ -104,6 +117,20 @@ function setSendToSlackApproved_(approved) {
 function doGet(e) {
   try {
     var action = String((e && e.parameter && e.parameter.action) || "").trim();
+
+    // ── Shared-secret auth ────────────────────────────────────────────────────
+    // Reads DASHBOARD_API_TOKEN or API_SHARED_SECRET from Script Properties.
+    // Leave both unset to bypass auth (initial setup / org-only deployment).
+    var authToken = getSharedSecretToken_();
+    if (authToken) {
+      var reqToken = String((e && e.parameter && e.parameter.token) || "").trim();
+      if (reqToken !== authToken) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ error: true, message: "Unauthorized" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
     if (action === "getAiInsight") {
       var cycleParam = String((e && e.parameter && e.parameter.cycle) || "").trim();
       if (typeof getAiInsightResponse_ !== "function") {
@@ -119,6 +146,13 @@ function doGet(e) {
       }
       return ContentService
         .createTextOutput(JSON.stringify(getAiInsightResponse_(cycleParam)))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (action === "getActions") {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: true, actions: getActions(ss) }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -190,6 +224,7 @@ function doGet(e) {
       roleSplit:        getRoleSplit(ss),
       responseCounts:   getResponseCounts(ss, trends),
       responseMix:      getCurrentPulseResponseMix(ss),
+      comments:         getFormComments_(ss),
     };
 
     return ContentService
@@ -279,32 +314,10 @@ function getSummary(ss, thresholds, trends) {
     }
   }
 
-  // Re-derive totalResponses from Form Responses filtered by active cycle.
-  // The Summary sheet value is an all-time total; we need only the current pulse count.
+  // Re-derive totalResponses for the active cycle (single read via shared helper).
   var settings = typeof readSettings === "function" ? readSettings() : {};
-  var formSheetName = settings.formSheetName || PULSE_CONFIG.FORM_RESPONSE_SHEET;
-  var formSheet = ss.getSheetByName(formSheetName);
-  if (formSheet && formSheet.getLastRow() > 1) {
-    var formData = formSheet.getDataRange().getValues();
-    var formHeaders = formData[0];
-    var fCycleCol = -1;
-    for (var fh = 0; fh < formHeaders.length; fh++) {
-      var fhn = normalizeLabel(formHeaders[fh]);
-      if (fhn === "pulsecycle" || fhn === "cycle") { fCycleCol = fh; break; }
-    }
-    var activeCycleLabel = (trends && trends.length > 0)
-      ? String(trends[trends.length - 1].cycle || "").trim()
-      : getCycle(ss);
-    if (fCycleCol >= 0 && activeCycleLabel) {
-      var cycleCount = 0;
-      for (var fr = 1; fr < formData.length; fr++) {
-        if (String(formData[fr][fCycleCol] || "").trim() === activeCycleLabel) cycleCount++;
-      }
-      if (cycleCount > 0) totalResponses = cycleCount;
-    } else if (!totalResponses) {
-      totalResponses = formSheet.getLastRow() - 1;
-    }
-  }
+  var activeCycleResponseCount = getActiveCycleResponseCount_(ss, settings, trends);
+  if (activeCycleResponseCount > 0) totalResponses = activeCycleResponseCount;
 
   // Fallback: if no explicit Overall Score row, compute average from the 7 area rows
   if (!overallScore) {
@@ -331,14 +344,9 @@ function getSummary(ss, thresholds, trends) {
     if (!lowestArea  && worstArea) lowestArea  = worstArea;
   }
 
-  // Fallback: count Form Responses rows when Summary has no "Total Responses" row
+  // Fallback: count form responses when Summary has no "Total Responses" row.
   if (!totalResponses) {
-    var settingsFallback = typeof readSettings === "function" ? readSettings() : {};
-    var formSheetNameFallback = settingsFallback.formSheetName || PULSE_CONFIG.FORM_RESPONSE_SHEET;
-    var formSheetFallback = ss.getSheetByName(formSheetNameFallback);
-    if (formSheetFallback && formSheetFallback.getLastRow() > 1) {
-      totalResponses = formSheetFallback.getLastRow() - 1; // subtract header row
-    }
+    totalResponses = getActiveCycleResponseCount_(ss, settings, trends);
   }
 
   // Derive status from score — never rely on a human-typed label in the sheet
@@ -527,31 +535,299 @@ function getRecommendations(ss) {
   return recs;
 }
 
-// ── Commitments (action tracker) ──────────────────────────────────────────────
+// ── Open-text comments from Form Responses (column K / recommendation question) ─
 /**
- * Col A = concern, B = commitment/action, C = owner, D = status,
- * E = pulse opened, F = area
+ * Reads the "What one recommendation would you give to leadership..." column.
+ * Targets the column by fuzzy header match first (keywords: recommendation +
+ * leadership, or support + team), then falls back to column index 11 (K).
+ *
+ * Returns an array of objects: { cycle, comment }
+ * Only includes rows for the currently active cycle.
+ * Applies lightweight cleaning: strips blanks, placeholder answers, and
+ * any content that looks like a prompt injection attempt.
+ *
+ * SECURITY: never include this data verbatim in a user-facing response.
+ * The dashboard route wraps it in injection-safe delimiters before sending to Gemini.
+ */
+function getFormComments_(ss) {
+  var settings = (typeof readSettings === "function") ? readSettings() : {};
+  var currentCycle = safeText_(settings.currentCycle);
+  var formSheetName = settings.formSheetName || PULSE_CONFIG.FORM_RESPONSE_SHEET;
+
+  var sheet = ss.getSheetByName(formSheetName);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+
+  var lastCol = sheet.getLastColumn();
+  var lastRow = sheet.getLastRow();
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0] || [];
+
+  // ── Find comment column (fuzzy header match) ─────────────────────────────
+  var commentCol = -1;
+  var cycleCol   = -1;
+
+  for (var h = 0; h < headers.length; h++) {
+    var hn = safeText_(headers[h]).toLowerCase().replace(/[^a-z0-9 ]/g, "");
+    // Detect the recommendation-to-leadership question column
+    if (commentCol < 0 && (
+      (hn.indexOf("recommendation") >= 0 && hn.indexOf("leadership") >= 0) ||
+      (hn.indexOf("support") >= 0 && hn.indexOf("team") >= 0) ||
+      (hn.indexOf("recommend") >= 0 && hn.indexOf("give") >= 0)
+    )) {
+      commentCol = h;
+    }
+    // Detect the pulse cycle column
+    if (cycleCol < 0 && (hn === "pulsecycle" || hn === "pulse cycle" || hn === "cycle")) {
+      cycleCol = h;
+    }
+  }
+
+  // Fallback to column index 10 (K, 0-based) if header match failed
+  if (commentCol < 0 && lastCol >= 11) {
+    commentCol = 10;
+  }
+  if (commentCol < 0) return [];
+
+  var data = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  var comments = [];
+
+  // Phrases that indicate a prompt injection attempt or empty/useless response
+  var injectionPatterns = [
+    /ignore\s+(all\s+)?(previous|above|prior|earlier)/i,
+    /disregard\s+(all\s+)?(previous|above|prior|earlier)/i,
+    /you\s+are\s+now/i,
+    /act\s+as\s+a?(n?)\s+/i,
+    /system\s+prompt/i,
+    /new\s+instruction/i,
+    /forget\s+(all\s+)?(previous|above|what)/i,
+    /<<<|>>>/,  // injection delimiter mimicry
+    /\[system\]/i,
+  ];
+
+  // Phrases that are non-answers (case-insensitive, after normalizing whitespace)
+  var emptyPatterns = [
+    /^(n\/?a|none|nil|no\s+comment|nothing|nothing\s+to\s+add|no\s+feedback|not\s+applicable|na|n\.a\.)$/i,
+    /^-+$/,
+    /^\.+$/,
+  ];
+
+  for (var r = 0; r < data.length; r++) {
+    var raw = safeText_(data[r][commentCol]);
+    if (!raw || raw.length < 5) continue;
+
+    // Filter by active cycle if we have a cycle column
+    if (cycleCol >= 0 && currentCycle) {
+      var rowCycle = safeText_(data[r][cycleCol]);
+      if (rowCycle && rowCycle !== currentCycle) continue;
+    }
+
+    // Skip non-answers
+    var isEmpty = false;
+    for (var ep = 0; ep < emptyPatterns.length; ep++) {
+      if (emptyPatterns[ep].test(raw)) { isEmpty = true; break; }
+    }
+    if (isEmpty) continue;
+
+    // Detect and skip injection attempts (log them instead of silently dropping)
+    var isInjection = false;
+    for (var ip = 0; ip < injectionPatterns.length; ip++) {
+      if (injectionPatterns[ip].test(raw)) {
+        Logger.log("getFormComments_: skipped potential injection in row " + (r + 2));
+        isInjection = true;
+        break;
+      }
+    }
+    if (isInjection) continue;
+
+    // Truncate at 500 chars to prevent prompt bloat from unusually long answers
+    var cleaned = raw.length > 500 ? raw.substring(0, 500) + "…" : raw;
+
+    comments.push(cleaned);
+  }
+
+  return comments;
+}
+
+// ── Commitments (action tracker) ──────────────────────────────────────────────
+
+/**
+ * Run once from Apps Script editor: select this function → click Run.
+ * Rewrites Action Tracker headers and remaps all existing rows to:
+ *   Pulse Opened | Area | Action | Owner | Status | Notes
+ */
+function migrateActionTrackerNow() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_ACTIONS);
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert("Action Tracker sheet not found.");
+    return;
+  }
+  var ui = SpreadsheetApp.getUi();
+  var confirm = ui.alert(
+    "Rescue Action Tracker Layout",
+    "This will rewrite all rows into the canonical 8-column format:\n" +
+    "Pulse Opened | Area | Action | Owner | Status | Notes | isPinned | id\n\n" +
+    "Existing data will be remapped and a stable id will be generated for each row.\n\nContinue?",
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (confirm !== ui.Button.OK) return;
+  rescueActionTrackerSchema_(sheet);
+  ui.alert("Done! Action Tracker layout has been rescued.\nA stable id has been assigned to each row.");
+}
+
+/**
+ * NON-DESTRUCTIVE schema check — safe to call on every read/write.
+ * Only adds missing column G (isPinned) or column H (id) headers.
+ * Never remaps rows or clears content.
+ * For layout rescue on old/broken sheets use menu → Rescue Action Tracker Layout.
+ */
+function ensureActionTrackerSchema_(sheet) {
+  var requiredHeaders = ["Pulse Opened", "Area", "Action", "Owner", "Status", "Notes", "isPinned", "id"];
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(requiredHeaders);
+    sheet.getRange(1, 1, 1, requiredHeaders.length).setFontWeight("bold");
+    return;
+  }
+
+  var width = Math.max(sheet.getLastColumn(), 8);
+  var headers = sheet.getRange(1, 1, 1, width).getValues()[0] || [];
+
+  // Verify cols A–F are in the expected order before touching anything.
+  var coreMatch =
+    normalizeLabel(headers[0]) === "pulseopened" &&
+    normalizeLabel(headers[1]) === "area" &&
+    (normalizeLabel(headers[2]) === "action" || normalizeLabel(headers[2]) === "suggestedaction") &&
+    normalizeLabel(headers[3]) === "owner" &&
+    normalizeLabel(headers[4]) === "status" &&
+    (normalizeLabel(headers[5]) === "notes" || normalizeLabel(headers[5]) === "note");
+
+  if (!coreMatch) {
+    // Unknown layout — never auto-migrate. Run menu → Rescue Action Tracker Layout.
+    Logger.log("ensureActionTrackerSchema_: unrecognized layout — skipping. Run 'Rescue Action Tracker Layout' from the Pulse Dashboard menu.");
+    return;
+  }
+
+  // Safely add any missing optional columns (never destructive).
+  var hasIsPinned = headers.length > 6 && normalizeLabel(headers[6]) === "ispinned";
+  var hasId       = headers.length > 7 && normalizeLabel(headers[7]) === "id";
+
+  if (!hasIsPinned) sheet.getRange(1, 7).setValue("isPinned").setFontWeight("bold");
+  if (!hasId)       sheet.getRange(1, 8).setValue("id").setFontWeight("bold");
+}
+
+/**
+ * DESTRUCTIVE schema rescue — only called from migrateActionTrackerNow (menu).
+ * Rewrites the sheet to the canonical 8-column layout, assigning a stable UUID to each row.
+ * Never called from getActions, saveAction, or updateAction.
+ */
+function rescueActionTrackerSchema_(sheet) {
+  var requiredHeaders = ["Pulse Opened", "Area", "Action", "Owner", "Status", "Notes", "isPinned", "id"];
+  var width = Math.max(sheet.getLastColumn(), 8);
+  var headers = sheet.getLastRow() > 0
+    ? (sheet.getRange(1, 1, 1, width).getValues()[0] || [])
+    : [];
+
+  var idxPulse = -1, idxArea = -1, idxAction = -1, idxOwner = -1;
+  var idxStatus = -1, idxNotes = -1, idxConcern = -1, idxId = -1;
+  for (var h = 0; h < headers.length; h++) {
+    var hn = normalizeLabel(headers[h]);
+    if (hn === "pulseopened") idxPulse = h;
+    if (hn === "area") idxArea = h;
+    if (hn === "action" || hn === "suggestedaction") idxAction = h;
+    if (hn === "owner") idxOwner = h;
+    if (hn === "status") idxStatus = h;
+    if (hn === "notes" || hn === "note") idxNotes = h;
+    if (hn === "concern") idxConcern = h;
+    if (hn === "id") idxId = h;
+  }
+
+  var looksLikeConcernFirst =
+    normalizeLabel(headers[0]) === "concern" &&
+    normalizeLabel(headers[1]) === "action" &&
+    normalizeLabel(headers[2]) === "owner" &&
+    normalizeLabel(headers[3]) === "status" &&
+    normalizeLabel(headers[4]) === "pulseopened";
+
+  var looksLikeAreaFirstOld =
+    normalizeLabel(headers[0]) === "area" &&
+    normalizeLabel(headers[1]) === "action" &&
+    normalizeLabel(headers[2]) === "owner" &&
+    normalizeLabel(headers[3]) === "status" &&
+    normalizeLabel(headers[4]) === "pulseopened";
+
+  var rows = [];
+  if (sheet.getLastRow() >= 2) {
+    rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues();
+  }
+
+  var migrated = [];
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    var pulse  = idxPulse  >= 0 ? String(row[idxPulse]  || "").trim() : "";
+    var area   = idxArea   >= 0 ? String(row[idxArea]   || "").trim() : "";
+    if (!area && idxConcern >= 0) area = String(row[idxConcern] || "").trim();
+    var action = idxAction >= 0 ? String(row[idxAction] || "").trim() : "";
+    var owner  = idxOwner  >= 0 ? String(row[idxOwner]  || "").trim() : "";
+    var status = idxStatus >= 0 ? String(row[idxStatus] || "Planned").trim() : "Planned";
+    var notes  = idxNotes  >= 0 ? String(row[idxNotes]  || "").trim() : "";
+    // Preserve existing id if present; otherwise generate a new stable UUID.
+    var rowId  = (idxId >= 0 && String(row[idxId] || "").trim())
+      ? String(row[idxId]).trim()
+      : Utilities.getUuid();
+
+    if (looksLikeConcernFirst || looksLikeAreaFirstOld) {
+      pulse  = String(row[4] || "").trim();
+      area   = String((looksLikeConcernFirst ? row[5] : row[0]) || "").trim();
+      action = String(row[1] || "").trim();
+      owner  = String(row[2] || "").trim();
+      status = String(row[3] || "Planned").trim() || "Planned";
+      notes  = String((looksLikeConcernFirst ? row[6] : row[5]) || "").trim();
+    }
+
+    if (!action && row.length >= 2) action = String(row[1] || "").trim();
+    if (!owner  && row.length >= 3) owner  = String(row[2] || "").trim();
+    if ((!status || status === "") && row.length >= 4) status = String(row[3] || "Planned").trim();
+
+    migrated.push([pulse, area, action, owner, status || "Planned", notes, "FALSE", rowId]);
+  }
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, requiredHeaders.length).setValues([requiredHeaders]).setFontWeight("bold");
+  if (migrated.length > 0) {
+    sheet.getRange(2, 1, migrated.length, requiredHeaders.length).setValues(migrated);
+  }
+}
+
+/**
+ * Col A = pulse opened, B = area, C = commitment/action,
+ * D = owner, E = status, F = notes, G = isPinned
  */
 function getActions(ss) {
   var sheet = ss.getSheetByName(SHEET_ACTIONS);
   if (!sheet) return [];
 
+  ensureActionTrackerSchema_(sheet);
+
   var data = sheet.getDataRange().getValues();
   var actions = [];
 
   for (var i = 1; i < data.length; i++) {
-    var concern = String(data[i][0]).trim();
-    if (!concern) continue;
+    var suggestedAction = String(data[i][2] || "").trim();
+    if (!suggestedAction) continue;
 
     var action = {
-      concern:         concern,
-      suggestedAction: String(data[i][1] || "").trim(),
-      owner:           String(data[i][2] || "").trim(),
-      status:          String(data[i][3] || "").trim() || "Planned",
+      area:            String(data[i][1] || "").trim(),
+      suggestedAction: suggestedAction,
+      owner:           String(data[i][3] || "").trim(),
+      status:          String(data[i][4] || "").trim() || "Planned",
+      isPinned:        (data[i].length > 6) ? (String(data[i][6] || "FALSE").trim() === "TRUE") : false,
     };
-    if (data[i].length > 4 && String(data[i][4]).trim()) action.pulseOpened = String(data[i][4]).trim();
-    if (data[i].length > 5 && String(data[i][5]).trim()) action.area        = String(data[i][5]).trim();
-    if (data[i].length > 6 && String(data[i][6]).trim()) action.notes       = String(data[i][6]).trim();
+    if (data[i].length > 0 && String(data[i][0]).trim()) action.pulseOpened = String(data[i][0]).trim();
+    if (data[i].length > 5 && String(data[i][5]).trim()) action.notes = String(data[i][5]).trim();
+    if (data[i].length > 7 && String(data[i][7]).trim()) action.id = String(data[i][7]).trim();
+
+    // Skip rows soft-deleted via the dashboard UI
+    if (action.status === "Deleted") continue;
 
     actions.push(action);
   }
@@ -992,13 +1268,41 @@ function stringifyRowsForCell_(rows) {
 
 // ── AI Insights persistence (sheet-backed, one active record per cycle) ─────
 function doPost(e) {
+  var lock = null;
   try {
     var payload = {};
     if (e && e.postData && e.postData.contents) {
-      payload = JSON.parse(e.postData.contents);
+      try {
+        payload = JSON.parse(e.postData.contents);
+      } catch (parseErr) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ error: true, message: "Invalid JSON body" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    // ── Shared-secret auth ────────────────────────────────────────────────────
+    var authToken = getSharedSecretToken_();
+    if (authToken) {
+      var reqToken = String(payload.token || "").trim();
+      if (reqToken !== authToken) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ error: true, message: "Unauthorized" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
     }
 
     var action = String(payload.action || "").trim();
+
+    // ── Document lock (serialise all mutations) ─────────────────────────────────
+    lock = LockService.getDocumentLock();
+    if (!lock.tryLock(15000)) {
+      lock = null;
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: false, message: "Service busy, please try again in a moment" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     if (action === "upsertAiInsight") {
       var cycle = String(payload.cycle || "").trim();
       var summary = String(payload.summary || "").trim();
@@ -1087,6 +1391,99 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
+    if (action === "saveAction") {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var sheet = getOrCreateSheet_(ss, SHEET_ACTIONS);
+      ensureActionTrackerSchema_(sheet);
+      var areaVal = String(payload.area || "").trim();
+      var statusVal = String(payload.status || "Planned").trim();
+      // Reject the soft-delete sentinel on create — clients must use deleteAction.
+      var ALLOWED_CREATE_STATUS = { "Planned": true, "In Progress": true, "Completed": true };
+      if (!ALLOWED_CREATE_STATUS[statusVal]) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ ok: false, message: "Invalid status" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      sheet.appendRow([
+        String(payload.pulseOpened || "").trim(),           // col A: pulse opened
+        areaVal,                                             // col B: area (single source of truth)
+        String(payload.suggestedAction || "").trim(),       // col C: action
+        String(payload.owner || "").trim(),                 // col D: owner
+        statusVal,                                           // col E: status
+        String(payload.notes || "").trim(),                 // col F: notes
+        payload.isPinned ? "TRUE" : "FALSE",                // col G: isPinned
+        Utilities.getUuid(),                                // col H: stable row id
+      ]);
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (action === "updateAction" || action === "deleteAction") {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var sheet = ss.getSheetByName(SHEET_ACTIONS);
+      if (!sheet || sheet.getLastRow() < 2) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ ok: false, message: "Action Tracker sheet not found or empty" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      ensureActionTrackerSchema_(sheet);
+      var keyId       = String(payload.id || "").trim();
+      var keyAction   = String(payload.originalSuggestedAction || payload.suggestedAction || "").trim();
+      var keyOwner    = String(payload.originalOwner || payload.owner || "").trim();
+      var keyArea     = String(payload.originalArea || payload.area || "").trim();
+      var data = sheet.getDataRange().getValues();
+      var targetRow = -1;
+      // Prefer stable id match (col H, index 7) — avoids content-collision bugs.
+      if (keyId) {
+        for (var ri = 1; ri < data.length; ri++) {
+          if (data[ri].length > 7 && String(data[ri][7] || "").trim() === keyId) {
+            targetRow = ri + 1;
+            break;
+          }
+        }
+      }
+      // Fallback: content-based match for rows created before id column was added.
+      if (targetRow < 0) {
+        for (var ri2 = 1; ri2 < data.length; ri2++) {
+          var rowAction = String(data[ri2][2] || "").trim();
+          var rowOwner  = String(data[ri2][3] || "").trim();
+          var rowArea   = String(data[ri2][1] || "").trim();
+          if (rowAction === keyAction && rowOwner === keyOwner && rowArea === keyArea) {
+            targetRow = ri2 + 1;
+            break;
+          }
+        }
+      }
+      if (targetRow < 0) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ ok: false, message: "Action not found" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      if (action === "deleteAction") {
+        sheet.getRange(targetRow, 5).setValue("Deleted");
+      } else {
+        // Reject "Deleted" on update — only deleteAction may set that sentinel.
+        var newStatus = String(payload.status || "Planned").trim();
+        var ALLOWED_UPDATE_STATUS = { "Planned": true, "In Progress": true, "Completed": true };
+        if (!ALLOWED_UPDATE_STATUS[newStatus]) {
+          return ContentService
+            .createTextOutput(JSON.stringify({ ok: false, message: "Invalid status" }))
+            .setMimeType(ContentService.MimeType.JSON);
+        }
+        if (payload.pulseOpened !== undefined) sheet.getRange(targetRow, 1).setValue(String(payload.pulseOpened || "").trim()); // col A: pulse opened
+        if (payload.area !== undefined) sheet.getRange(targetRow, 2).setValue(String(payload.area || "").trim()); // col B: area
+        if (payload.suggestedAction !== undefined) sheet.getRange(targetRow, 3).setValue(String(payload.suggestedAction || "").trim()); // col C: action
+        if (payload.owner !== undefined) sheet.getRange(targetRow, 4).setValue(String(payload.owner || "").trim()); // col D: owner
+        sheet.getRange(targetRow, 5).setValue(newStatus); // col E: status
+        if (payload.notes !== undefined) sheet.getRange(targetRow, 6).setValue(String(payload.notes || "").trim()); // col F: notes
+        if (payload.isPinned !== undefined) sheet.getRange(targetRow, 7).setValue(payload.isPinned ? "TRUE" : "FALSE"); // col G: isPinned
+      }
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     return ContentService
       .createTextOutput(JSON.stringify({ error: true, message: "Unknown action" }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -1094,5 +1491,7 @@ function doPost(e) {
     return ContentService
       .createTextOutput(JSON.stringify({ error: true, message: e.message }))
       .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    if (lock) lock.releaseLock();
   }
 }

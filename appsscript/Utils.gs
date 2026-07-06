@@ -1,3 +1,45 @@
+/**
+ * Single source of truth for active-cycle response count.
+ * Reads the Form Responses sheet once and counts rows matching the current pulse.
+ * Falls back to total row count when no cycle column is present.
+ * @param {Spreadsheet} ss
+ * @param {Object} settings - result of readSettings()
+ * @param {Array} trends - result of getTrends() (may be empty)
+ * @return {number} Response count (0 if sheet not found or no data)
+ */
+function getActiveCycleResponseCount_(ss, settings, trends) {
+  var formSheetName = (settings && settings.formSheetName) || PULSE_CONFIG.FORM_RESPONSE_SHEET;
+  var sheet = ss.getSheetByName(formSheetName);
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0] || [];
+
+  var cycleCol = -1;
+  for (var c = 0; c < headers.length; c++) {
+    var hn = normalizeLabel(headers[c]);
+    if (hn === "pulsecycle" || hn === "cycle") { cycleCol = c; break; }
+  }
+
+  var activeCycle = "";
+  if (trends && trends.length > 0) {
+    activeCycle = String(trends[trends.length - 1].cycle || "").trim();
+  } else if (settings && settings.currentCycle) {
+    activeCycle = safeText_(settings.currentCycle);
+  }
+
+  if (cycleCol >= 0 && activeCycle) {
+    var count = 0;
+    for (var r = 1; r < data.length; r++) {
+      if (String(data[r][cycleCol] || "").trim() === activeCycle) count++;
+    }
+    return count;
+  }
+
+  // Fallback: no cycle column — return total data rows (minus header)
+  return data.length - 1;
+}
+
 function appendTrend(rows, classified, meta) {
 	var ss = SpreadsheetApp.getActiveSpreadsheet();
 	var sheet = getOrCreateSheet_(ss, PULSE_CONFIG.HISTORY_SHEET);

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import type { GeminiInsightsResponse, GeminiInsightRow } from "@/types/gemini";
+import type { SummaryData, AreaScore, TrendPoint, RecommendationTheme, RoleSplitRow } from "@/types/dashboard";
 
 type Priority = "High" | "Medium" | "Low";
 
@@ -13,11 +14,12 @@ const PRIORITY_STYLES: Record<Priority, string> = {
 
 interface Props {
   cycle: string;
-  summary: object;
-  areaScores: object[];
-  trends: object[];
-  recommendations: object[];
-  roleSplit?: object[];
+  summary: SummaryData;
+  areaScores: AreaScore[];
+  trends: TrendPoint[];
+  recommendations: RecommendationTheme[];
+  roleSplit?: RoleSplitRow[];
+  comments?: string[];
 }
 
 interface ConfirmDialogState {
@@ -30,11 +32,13 @@ interface ConfirmDialogState {
 function isGeminiInsightRow(value: unknown): value is GeminiInsightRow {
   if (!value || typeof value !== "object") return false;
   const row = value as Record<string, unknown>;
-  return (
-    typeof row.roleGroupsMentioning === "string" &&
-    typeof row.insight === "string" &&
-    typeof row.recommendation === "string"
-  );
+  if (
+    typeof row.roleGroupsMentioning !== "string" ||
+    typeof row.insight !== "string" ||
+    typeof row.recommendation !== "string"
+  ) return false;
+  if (row.mentionCount !== undefined && row.mentionCount !== null && typeof row.mentionCount !== "number") return false;
+  return true;
 }
 
 function isGeminiInsightsResponse(value: unknown): value is GeminiInsightsResponse {
@@ -73,8 +77,10 @@ function formatSavedDateUk(raw: string | undefined): string {
   return value;
 }
 
-export default function GeminiInsights({ cycle, summary, areaScores, trends, recommendations, roleSplit }: Props) {
-  const cacheKey = `gemini_insights_${cycle}`;
+export default function GeminiInsights({ cycle, summary, areaScores, trends, recommendations, roleSplit, comments }: Props) {
+  // Bump when the cached shape changes so stale entries are discarded automatically.
+  const CACHE_SCHEMA_VERSION = 1;
+  const cacheKey = `gemini_insights_v${CACHE_SCHEMA_VERSION}_${cycle}`;
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<GeminiInsightsResponse | null>(null);
@@ -214,6 +220,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
           trends,
           recommendations,
           roleSplit,
+          comments,
           forceRegenerate,
           confirmUnchanged: forceRegenerate,
           generatedBy: "Leadership",
@@ -368,7 +375,17 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
                     {String(row.roleGroupsMentioning).replace(/,([^\s])/g, ", $1")}
                   </td>
                   <td className="px-4 py-3 text-slate-600 border-b border-slate-100 align-top">
-                    {row.insight}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span>{row.insight}</span>
+                      {typeof row.mentionCount === "number" && row.mentionCount >= 2 && (
+                        <span
+                          title={`Raised by ${row.mentionCount} employees (verified from similar comments)`}
+                          className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 ring-1 ring-inset ring-indigo-200 whitespace-nowrap"
+                        >
+                          {row.mentionCount} employees
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-slate-600 border-b border-slate-100 align-top">
                     {row.recommendation}

@@ -52,35 +52,11 @@ function readKeyMetrics() {
     }
   });
 
-  // Always re-derive totalResponses by counting Form Responses rows for the
-  // active cycle only — the Summary sheet value is an all-time total and will
-  // be wrong for any pulse after the first.
+  // Re-derive totalResponses for the active cycle only (centralized helper).
   const settings = readSettings();
-  const formSheetName = settings.formSheetName || PULSE_CONFIG.FORM_RESPONSE_SHEET;
-  const formSheet = ss.getSheetByName(formSheetName);
-  if (formSheet && formSheet.getLastRow() > 1) {
-    const formValues = formSheet.getDataRange().getValues();
-    const formHeaders = formValues[0];
-
-    // Find the Pulse Cycle column
-    var cycleCol = -1;
-    for (var fc = 0; fc < formHeaders.length; fc++) {
-      const hn = safeText_(formHeaders[fc]).toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (hn === "pulsecycle" || hn === "cycle") { cycleCol = fc; break; }
-    }
-
-    if (cycleCol >= 0 && settings.currentCycle) {
-      // Count only rows matching the active cycle
-      var cycleCount = 0;
-      for (var fr = 1; fr < formValues.length; fr++) {
-        if (safeText_(formValues[fr][cycleCol]) === settings.currentCycle) cycleCount++;
-      }
-      if (cycleCount > 0) result.totalResponses = String(cycleCount);
-    } else if (!result.totalResponses) {
-      // Fallback: no cycle column — use full row count
-      result.totalResponses = String(formSheet.getLastRow() - 1);
-    }
-  }
+  const trends = typeof getTrends === "function" ? getTrends(ss) : [];
+  const cycleCount = getActiveCycleResponseCount_(ss, settings, trends);
+  if (cycleCount > 0) result.totalResponses = String(cycleCount);
 
   return result;
 }
@@ -110,6 +86,13 @@ function readOpenTextResponses() {
 }
 
 function generateAISummary() {
+  // DEPRECATED (2026-06-17): AI insights are generated on-demand by the
+  // Next.js /api/gemini-insights route, which uses a hardened prompt with
+  // injection-safe comment delimiters and per-cycle persistence.
+  // This function is retained only for manual sheet-side testing and MUST NOT
+  // be called from the pipeline. Delete after a validation period.
+  Logger.log("generateAISummary is deprecated. Use /api/gemini-insights instead.");
+
   const apiKey = PropertiesService.getScriptProperties().getProperty(PULSE_CONFIG.GEMINI_API_KEY_PROPERTY);
 
   if (!apiKey) {

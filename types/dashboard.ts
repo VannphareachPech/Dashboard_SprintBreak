@@ -27,7 +27,6 @@ export interface RecommendationTheme {
 export type ActionStatus = "Planned" | "In Progress" | "Completed";
 
 export interface ActionItem {
-  concern: string;
   suggestedAction: string;
   owner: string;
   status: ActionStatus;
@@ -35,6 +34,7 @@ export interface ActionItem {
   area?: string;            // linked survey area for outcome correlation
   notes?: string;           // optional free-text notes
   isPinned?: boolean;       // leadership pin flag for high-priority items
+  id?: string;              // stable UUID assigned by Apps Script on creation; used for update/delete matching
 }
 
 export interface SummaryData {
@@ -70,6 +70,7 @@ export interface DashboardData {
   roleSplit?: RoleSplitRow[];          // per-area scores by role group
   responseCounts?: ResponseCountPoint[]; // response participation per pulse
   responseMix?: ResponseMixRow[];      // per-area positive/mixed/negative share
+  comments?: string[];                  // open-text recommendations from column K (current cycle, filtered)
 }
 
 // ── Role Split ────────────────────────────────────────────────────────────────

@@ -1,5 +1,23 @@
 import type { DashboardData, TrendPoint } from "@/types/dashboard";
 
+export type DashboardFetchErrorCode =
+  | "MISSING_URL"
+  | "HTTP_ERROR"
+  | "NON_JSON_RESPONSE"
+  | "INVALID_PAYLOAD"
+  | "NETWORK_ERROR";
+
+export interface DashboardFetchError {
+  code: DashboardFetchErrorCode;
+  message: string;
+  details?: string;
+}
+
+export interface DashboardFetchResult {
+  data: DashboardData | null;
+  error: DashboardFetchError | null;
+}
+
 function scoreToOverallStatus(score: number): string {
   // Keep UI status consistent with the displayed hero score.
   if (score >= 4.0) return "Strong";
@@ -26,32 +44,77 @@ function hasUsablePulseHistory(trends: TrendPoint[]): boolean {
   return trends.every((t) => !/unknown/i.test(String(t.cycle || "")));
 }
 
-export async function fetchDashboardData(): Promise<DashboardData | null> {
+export async function fetchDashboardData(): Promise<DashboardFetchResult> {
   const url = process.env.APPS_SCRIPT_URL;
   const isDev = process.env.NODE_ENV !== "production";
+  const requestTimeoutMs = 30000;
+  // Page uses `dynamic = "force-dynamic"`, so per-request caching is intentionally
+  // off. `no-store` here documents that behaviour explicitly (was previously
+  // `revalidate: 300` which never took effect and was misleading).
+  const nextCacheOptions = { cache: "no-store" } as const;
 
   if (!url) {
-    return null;
+    return {
+      data: null,
+      error: {
+        code: "MISSING_URL",
+        message: "APPS_SCRIPT_URL is not configured.",
+      },
+    };
+  }
+
+  // Warn (loudly) when the shared-secret token is missing in production so
+  // operators notice the fail-open condition instead of silently deploying.
+  if (!isDev && !process.env.APPS_SCRIPT_TOKEN) {
+    console.warn(
+      "[fetchDashboardData] APPS_SCRIPT_TOKEN is not set. Apps Script endpoint " +
+        "will be accessible without authentication. Set APPS_SCRIPT_TOKEN in the " +
+        "environment and DASHBOARD_API_TOKEN in Apps Script Script Properties."
+    );
   }
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    // Attach shared-secret token when configured (C1 auth).
+    const appsScriptToken = process.env.APPS_SCRIPT_TOKEN;
+    const authenticatedUrl = appsScriptToken
+      ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(appsScriptToken)}`
+      : url;
+
+    async function fetchWithTimeout(): Promise<Response> {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
+      try {
+        return await fetch(authenticatedUrl, {
+          ...nextCacheOptions,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
 
     let res: Response;
     try {
-      res = await fetch(url, {
-        cache: isDev ? "no-store" : "force-cache",
-        next: isDev ? undefined : { revalidate: 3600 },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
+      res = await fetchWithTimeout();
+    } catch (firstErr) {
+      // Apps Script can spike on cold starts; retry once on timeout/abort.
+      if (firstErr instanceof Error && firstErr.name === "AbortError") {
+        res = await fetchWithTimeout();
+      } else {
+        throw firstErr;
+      }
     }
 
     if (!res.ok) {
       console.error(`Apps Script fetch failed: ${res.status}`);
-      return null;
+      return {
+        data: null,
+        error: {
+          code: "HTTP_ERROR",
+          message: "Apps Script endpoint returned a non-OK response.",
+          details: `HTTP ${res.status}`,
+        },
+      };
     }
 
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
@@ -65,7 +128,14 @@ export async function fetchDashboardData(): Promise<DashboardData | null> {
           preview: raw.slice(0, 180),
         }
       );
-      return null;
+      return {
+        data: null,
+        error: {
+          code: "NON_JSON_RESPONSE",
+          message: "Apps Script did not return JSON.",
+          details: contentType || "Unknown content type",
+        },
+      };
     }
 
     const data = JSON.parse(raw) as Partial<DashboardData>;
@@ -82,7 +152,13 @@ export async function fetchDashboardData(): Promise<DashboardData | null> {
     const resolvedStatus = scoreToOverallStatus(resolvedScore);
 
     if (!data.summary || !Array.isArray(data.areaScores) || data.areaScores.length === 0) {
-      return null;
+      return {
+        data: null,
+        error: {
+          code: "INVALID_PAYLOAD",
+          message: "Dashboard payload is missing required fields.",
+        },
+      };
     }
 
     const normalized: DashboardData = {
@@ -116,6 +192,9 @@ export async function fetchDashboardData(): Promise<DashboardData | null> {
       responseMix: Array.isArray(data.responseMix) && data.responseMix.length > 0
         ? data.responseMix
         : undefined,
+      comments: Array.isArray(data.comments) && data.comments.length > 0
+        ? (data.comments as string[])
+        : undefined,
     };
 
     const trendList = normalized.trends;
@@ -128,9 +207,19 @@ export async function fetchDashboardData(): Promise<DashboardData | null> {
       normalized.summary.scoreDelta = undefined;
     }
 
-    return normalized;
+    return {
+      data: normalized,
+      error: null,
+    };
   } catch (err) {
     console.error("fetchDashboardData error:", err);
-    return null;
+    return {
+      data: null,
+      error: {
+        code: "NETWORK_ERROR",
+        message: "Failed to reach Apps Script endpoint.",
+        details: err instanceof Error ? err.message : String(err),
+      },
+    };
   }
 }

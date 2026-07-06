@@ -111,7 +111,6 @@ export default function CreateActionModal({
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
     onSubmit({
-      concern: form.area,
       suggestedAction: form.suggestedAction.trim(),
       owner: form.owner.trim(),
       status: form.status,

@@ -4,11 +4,20 @@ interface HeaderProps {
   totalResponses?: number;
   teamSize?: number;
   participationTextOverride?: string;
+  children?: React.ReactNode;
 }
 
 const STALE_THRESHOLD_DAYS = 7;
 
-export default function Header({ cycle, generatedDate, totalResponses, teamSize, participationTextOverride }: HeaderProps) {
+function confidenceBadge(totalResponses: number, teamSize: number): { label: string; style: string } {
+  const rate = totalResponses / teamSize;
+  if (rate >= 0.75) return { label: "High confidence", style: "text-emerald-700" };
+  if (rate >= 0.55) return { label: "Good confidence", style: "text-indigo-700" };
+  if (rate >= 0.40) return { label: "Moderate confidence", style: "text-amber-700" };
+  return { label: "Low confidence", style: "text-rose-700" };
+}
+
+export default function Header({ cycle, generatedDate, totalResponses, teamSize, participationTextOverride, children }: HeaderProps) {
   const formatted = new Date(generatedDate).toLocaleDateString("en-AU", {
     day: "numeric",
     month: "long",
@@ -23,6 +32,9 @@ export default function Header({ cycle, generatedDate, totalResponses, teamSize,
       : null;
 
   const participation = participationTextOverride?.trim() || computedParticipation;
+  const confidence = totalResponses && teamSize && totalResponses > 0 && teamSize > 0
+    ? confidenceBadge(totalResponses, teamSize)
+    : null;
 
   const isStale = (() => {
     const generated = new Date(generatedDate);
@@ -43,19 +55,23 @@ export default function Header({ cycle, generatedDate, totalResponses, teamSize,
           </h1>
         </div>
         <div className="text-left sm:text-right max-w-xl">
-          <div className="flex flex-col items-start gap-2 sm:items-end">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs leading-none">
+          <div className="flex flex-col items-start gap-1.5 sm:items-end">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50 px-2.5 py-1 text-xs leading-none">
               <span className="font-medium text-slate-500">Cycle:</span>
               <span className="font-semibold text-slate-800">{cycle}</span>
             </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs leading-none">
-              <span className="font-medium text-slate-500">Generated:</span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50 px-2.5 py-1 text-xs leading-none">
+              <span className="font-medium text-slate-500">Data as of:</span>
               <span className="font-semibold text-slate-800">{formatted}</span>
+              {children && <span className="text-slate-300">•</span>}
+              {children}
             </span>
             {participation && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs leading-none">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50 px-2.5 py-1 text-xs leading-none">
                 <span className="font-medium text-slate-500">Participation:</span>
                 <span className="font-semibold text-slate-800">{participation}</span>
+                {confidence && <span className="text-slate-300">•</span>}
+                {confidence && <span className={`font-semibold ${confidence.style}`}>{confidence.label}</span>}
               </span>
             )}
             {isStale && (

@@ -1,5 +1,83 @@
 // CHANGELOG
 // 2026-06-05 — Initial hackathon build
+// 2026-06-17 — Decouple onFormSubmit from heavy pipeline; add dirty flag + Slack cycle guard
+
+// ── Pipeline State (Script Properties) ───────────────────────────────────────
+// Keys stored in PropertiesService.getScriptProperties():
+//   PIPELINE_DIRTY          — "TRUE" / "FALSE"
+//   PIPELINE_LAST_SUBMIT    — ISO timestamp of last form submission
+//   PIPELINE_SLACK_SENT_<cycle> — "TRUE" once Slack has been posted for a cycle
+
+function getProp_(key, defaultVal) {
+  var val = PropertiesService.getScriptProperties().getProperty(key);
+  return (val !== null) ? val : (defaultVal !== undefined ? defaultVal : null);
+}
+
+function setProp_(key, value) {
+  PropertiesService.getScriptProperties().setProperty(key, String(value));
+}
+
+function markDirty_() {
+  setProp_("PIPELINE_DIRTY", "TRUE");
+  setProp_("PIPELINE_LAST_SUBMIT", new Date().toISOString());
+}
+
+function markClean_() {
+  setProp_("PIPELINE_DIRTY", "FALSE");
+}
+
+function isDirty_() {
+  return getProp_("PIPELINE_DIRTY", "FALSE") === "TRUE";
+}
+
+/**
+ * Returns true if a Slack summary has already been sent for the given cycle.
+ * Called by both the pipeline and SlackService as a safety guard.
+ */
+function isSlackSentForCycle_(cycle) {
+  if (!cycle) return false;
+  return getProp_("PIPELINE_SLACK_SENT_" + cycle, "FALSE") === "TRUE";
+}
+
+function markSlackSentForCycle_(cycle) {
+  if (!cycle) return;
+  setProp_("PIPELINE_SLACK_SENT_" + cycle, "TRUE");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Lightweight onFormSubmit handler.
+ * ONLY stamps the current cycle on the submitted row and marks the pipeline dirty.
+ * NEVER runs aggregation, AI, or Slack — those belong in runFullPipeline.
+ * Target execution time: < 1 second.
+ */
+function onFormSubmitLight(e) {
+  try {
+    if (typeof populatePulseCycleFromSettings_ === "function") {
+      populatePulseCycleFromSettings_(e);
+    }
+    markDirty_();
+    Logger.log("onFormSubmitLight: row stamped and dirty flag set.");
+  } catch (err) {
+    // Never rethrow — a trigger failure here would prevent Google from recording the submission.
+    Logger.log("onFormSubmitLight error (non-fatal): " + err.message);
+  }
+}
+
+/**
+ * Timer-triggered wrapper. Runs the full pipeline ONLY when new submissions
+ * have arrived since the last run (dirty = TRUE). Skips silently otherwise.
+ * Wired to the 6-hour time-based trigger via installTriggers().
+ */
+function runTimedPipeline_() {
+  if (!isDirty_()) {
+    Logger.log("runTimedPipeline_: no new submissions since last run. Skipping.");
+    return;
+  }
+  Logger.log("runTimedPipeline_: dirty flag set — running pipeline.");
+  runFullPipeline(null);
+}
 
 function generateLeadershipSummary() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -132,15 +210,12 @@ function runFullPipeline(e) {
 
     generateLeadershipSummary();      // builds Leadership Summary tab + appends Trend using TrendService
 
-    if (typeof generateAISummary === "function") {
-      try {
-        generateAISummary();          // calls Gemini, writes to AI Insights Log tab
-      } catch (eAi) {
-        Logger.log("AI summary step skipped due to error: " + eAi.message);
-      }
-    } else {
-      Logger.log("AI summary step skipped: generateAISummary is not defined.");
-    }
+    // Pipeline has processed all current data — mark clean so the timer doesn't re-run unnecessarily.
+    markClean_();
+
+    // AI insights are now generated on-demand by the Next.js /api/gemini-insights route
+    // using the hardened prompt with injection-safe comment delimiters.
+    // generateAISummary() (AIService.gs) is no longer called from the pipeline.
 
     if (typeof sendLeadershipSummaryToSlack === "function") {
       try {
@@ -267,13 +342,15 @@ function populatePulseCycleFromSettings_(e) {
 function installTriggers() {
   removeTriggers();
 
-  ScriptApp.newTrigger("runFullPipeline")
+  // Timer: runs every 6 hours but only does work when the dirty flag is TRUE.
+  ScriptApp.newTrigger("runTimedPipeline_")
     .timeBased()
     .everyHours(6)
     .create();
 
+  // Form submit: lightweight only — stamps cycle on the new row + sets dirty flag.
   try {
-    ScriptApp.newTrigger("runFullPipeline")
+    ScriptApp.newTrigger("onFormSubmitLight")
       .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
       .onFormSubmit()
       .create();
@@ -281,12 +358,13 @@ function installTriggers() {
     Logger.log("onFormSubmit trigger skipped: " + e.message);
   }
 
-  Logger.log("Triggers installed.");
+  Logger.log("Triggers installed: timer → runTimedPipeline_, form submit → onFormSubmitLight.");
 }
 
 function removeTriggers() {
+  var handlersToRemove = ["runFullPipeline", "runTimedPipeline_", "onFormSubmitLight"];
   ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === "runFullPipeline") {
+    if (handlersToRemove.indexOf(t.getHandlerFunction()) !== -1) {
       ScriptApp.deleteTrigger(t);
     }
   });

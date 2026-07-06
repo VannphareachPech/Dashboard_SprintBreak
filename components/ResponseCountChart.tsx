@@ -103,7 +103,7 @@ export default function ResponseCountChart({ data, teamSize }: Props) {
               fontSize: 12,
             }}
             formatter={(value) => {
-              var n = typeof value === "number" ? value : Number(value || 0);
+              const n = typeof value === "number" ? value : Number(value || 0);
               return [`${n} responses`, "Count"];
             }}
           />
