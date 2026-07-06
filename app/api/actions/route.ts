@@ -97,15 +97,15 @@ function sanitizeBody(raw: Record<string, unknown>, opts: { allowDeletedStatus?:
 
 async function proxyPost(body: Record<string, unknown>) {
   if (!APPS_SCRIPT_URL) return NextResponse.json({ error: "Not configured" }, { status: 500 });
-  // Attach shared-secret token so the Apps Script auth check passes.
-  const token = process.env.APPS_SCRIPT_TOKEN;
-  const bodyWithToken = token ? { ...body, token } : body;
+  // Attach shared secret so the Apps Script auth check passes (fail-closed).
+  const secret = process.env.APPS_SCRIPT_SECRET;
+  const bodyWithSecret = secret ? { ...body, secret } : body;
   try {
     const res = await fetch(APPS_SCRIPT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
-      body: JSON.stringify(bodyWithToken),
+      body: JSON.stringify(bodyWithSecret),
     });
     const data = await res.json() as Record<string, unknown>;
     return NextResponse.json(data);
@@ -120,8 +120,8 @@ export async function GET() {
   try {
     const url = new URL(APPS_SCRIPT_URL);
     url.searchParams.set("action", "getActions");
-    const token = process.env.APPS_SCRIPT_TOKEN;
-    if (token) url.searchParams.set("token", token);
+    const secret = process.env.APPS_SCRIPT_SECRET;
+    if (secret) url.searchParams.set("secret", secret);
     const res = await fetch(url.toString(), { cache: "no-store" });
     if (!res.ok) return NextResponse.json({ ok: false, actions: [] });
     const data = await res.json() as { ok?: boolean; actions?: ActionItem[] };

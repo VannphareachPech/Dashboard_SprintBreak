@@ -40,16 +40,22 @@ var SHEET_ROLE_SPLIT      = "Role Split";      // optional: per-area scores by r
 var SHEET_ROLE_SPLIT_SUMMARY = "Role Split Summary";
 var SHEET_AI_INSIGHTS     = "AI Insights";
 
-/**
- * Reads the shared-secret auth token from Script Properties.
- * Accepts either property name — DASHBOARD_API_TOKEN (documented name) or
- * API_SHARED_SECRET (used by some deployments) — so setup doesn't silently
- * break auth if a different name was used when configuring the property.
- * Returns "" (falsy) when neither is set, which bypasses auth entirely.
- */
-function getSharedSecretToken_() {
-  var props = PropertiesService.getScriptProperties();
-  return props.getProperty("DASHBOARD_API_TOKEN") || props.getProperty("API_SHARED_SECRET") || "";
+// ── Shared-secret access control ──────────────────────────────────────────────
+// Set the secret once via Script Properties: API_SHARED_SECRET = <random string>
+// The Next.js app must send the same value as APPS_SCRIPT_SECRET on every request.
+var API_SECRET_PROPERTY_KEY = "API_SHARED_SECRET";
+
+function isAuthorized_(providedSecret) {
+  var expected = PropertiesService.getScriptProperties().getProperty(API_SECRET_PROPERTY_KEY);
+  // If no secret is configured yet, fail closed (deny) rather than silently allowing everyone.
+  if (!expected) return false;
+  return String(providedSecret || "") === expected;
+}
+
+function unauthorizedResponse_() {
+  return ContentService
+    .createTextOutput(JSON.stringify({ error: true, message: "Unauthorized" }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // ── Default thresholds (overridden by Settings sheet if present) ─────────────
@@ -116,20 +122,12 @@ function setSendToSlackApproved_(approved) {
 // ── Main endpoint ─────────────────────────────────────────────────────────────
 function doGet(e) {
   try {
-    var action = String((e && e.parameter && e.parameter.action) || "").trim();
-
-    // ── Shared-secret auth ────────────────────────────────────────────────────
-    // Reads DASHBOARD_API_TOKEN or API_SHARED_SECRET from Script Properties.
-    // Leave both unset to bypass auth (initial setup / org-only deployment).
-    var authToken = getSharedSecretToken_();
-    if (authToken) {
-      var reqToken = String((e && e.parameter && e.parameter.token) || "").trim();
-      if (reqToken !== authToken) {
-        return ContentService
-          .createTextOutput(JSON.stringify({ error: true, message: "Unauthorized" }))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
+    var providedSecret = String((e && e.parameter && e.parameter.secret) || "").trim();
+    if (!isAuthorized_(providedSecret)) {
+      return unauthorizedResponse_();
     }
+
+    var action = String((e && e.parameter && e.parameter.action) || "").trim();
 
     if (action === "getAiInsight") {
       var cycleParam = String((e && e.parameter && e.parameter.cycle) || "").trim();
@@ -1282,14 +1280,8 @@ function doPost(e) {
     }
 
     // ── Shared-secret auth ────────────────────────────────────────────────────
-    var authToken = getSharedSecretToken_();
-    if (authToken) {
-      var reqToken = String(payload.token || "").trim();
-      if (reqToken !== authToken) {
-        return ContentService
-          .createTextOutput(JSON.stringify({ error: true, message: "Unauthorized" }))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
+    if (!isAuthorized_(payload.secret)) {
+      return unauthorizedResponse_();
     }
 
     var action = String(payload.action || "").trim();

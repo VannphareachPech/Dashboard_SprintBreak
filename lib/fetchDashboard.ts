@@ -45,7 +45,8 @@ function hasUsablePulseHistory(trends: TrendPoint[]): boolean {
 }
 
 export async function fetchDashboardData(): Promise<DashboardFetchResult> {
-  const url = process.env.APPS_SCRIPT_URL;
+  const baseUrl = process.env.APPS_SCRIPT_URL;
+  const secret = process.env.APPS_SCRIPT_SECRET;
   const isDev = process.env.NODE_ENV !== "production";
   const requestTimeoutMs = 30000;
   // Page uses `dynamic = "force-dynamic"`, so per-request caching is intentionally
@@ -53,7 +54,7 @@ export async function fetchDashboardData(): Promise<DashboardFetchResult> {
   // `revalidate: 300` which never took effect and was misleading).
   const nextCacheOptions = { cache: "no-store" } as const;
 
-  if (!url) {
+  if (!baseUrl) {
     return {
       data: null,
       error: {
@@ -63,28 +64,27 @@ export async function fetchDashboardData(): Promise<DashboardFetchResult> {
     };
   }
 
-  // Warn (loudly) when the shared-secret token is missing in production so
-  // operators notice the fail-open condition instead of silently deploying.
-  if (!isDev && !process.env.APPS_SCRIPT_TOKEN) {
+  // Warn (loudly) when the shared secret is missing in production so operators
+  // notice the fail-closed condition instead of silently deploying an endpoint
+  // that will reject every request.
+  if (!isDev && !secret) {
     console.warn(
-      "[fetchDashboardData] APPS_SCRIPT_TOKEN is not set. Apps Script endpoint " +
-        "will be accessible without authentication. Set APPS_SCRIPT_TOKEN in the " +
-        "environment and DASHBOARD_API_TOKEN in Apps Script Script Properties."
+      "[fetchDashboardData] APPS_SCRIPT_SECRET is not set. The Apps Script " +
+        "endpoint will reject all requests (fail-closed) until this matches " +
+        "the API_SHARED_SECRET Script Property in Apps Script."
     );
   }
 
-  try {
-    // Attach shared-secret token when configured (C1 auth).
-    const appsScriptToken = process.env.APPS_SCRIPT_TOKEN;
-    const authenticatedUrl = appsScriptToken
-      ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(appsScriptToken)}`
-      : url;
+  const url = secret
+    ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}secret=${encodeURIComponent(secret)}`
+    : baseUrl;
 
+  try {
     async function fetchWithTimeout(): Promise<Response> {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
-        return await fetch(authenticatedUrl, {
+        return await fetch(url, {
           ...nextCacheOptions,
           signal: controller.signal,
         });
@@ -152,6 +152,10 @@ export async function fetchDashboardData(): Promise<DashboardFetchResult> {
     const resolvedStatus = scoreToOverallStatus(resolvedScore);
 
     if (!data.summary || !Array.isArray(data.areaScores) || data.areaScores.length === 0) {
+      console.error(
+        "Apps Script returned JSON but summary/areaScores are missing or empty. Raw response preview:",
+        raw.slice(0, 500)
+      );
       return {
         data: null,
         error: {
