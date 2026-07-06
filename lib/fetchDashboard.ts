@@ -27,12 +27,17 @@ function hasUsablePulseHistory(trends: TrendPoint[]): boolean {
 }
 
 export async function fetchDashboardData(): Promise<DashboardData | null> {
-  const url = process.env.APPS_SCRIPT_URL;
+  const baseUrl = process.env.APPS_SCRIPT_URL;
+  const secret = process.env.APPS_SCRIPT_SECRET;
   const isDev = process.env.NODE_ENV !== "production";
 
-  if (!url) {
+  if (!baseUrl) {
     return null;
   }
+
+  const url = secret
+    ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}secret=${encodeURIComponent(secret)}`
+    : baseUrl;
 
   try {
     const controller = new AbortController();

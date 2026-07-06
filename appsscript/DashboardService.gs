@@ -40,6 +40,24 @@ var SHEET_ROLE_SPLIT      = "Role Split";      // optional: per-area scores by r
 var SHEET_ROLE_SPLIT_SUMMARY = "Role Split Summary";
 var SHEET_AI_INSIGHTS     = "AI Insights";
 
+// ── Shared-secret access control ──────────────────────────────────────────────
+// Set the secret once via Script Properties: API_SHARED_SECRET = <random string>
+// The Next.js app must send the same value as APPS_SCRIPT_SECRET on every request.
+var API_SECRET_PROPERTY_KEY = "API_SHARED_SECRET";
+
+function isAuthorized_(providedSecret) {
+  var expected = PropertiesService.getScriptProperties().getProperty(API_SECRET_PROPERTY_KEY);
+  // If no secret is configured yet, fail closed (deny) rather than silently allowing everyone.
+  if (!expected) return false;
+  return String(providedSecret || "") === expected;
+}
+
+function unauthorizedResponse_() {
+  return ContentService
+    .createTextOutput(JSON.stringify({ error: true, message: "Unauthorized" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 // ── Default thresholds (overridden by Settings sheet if present) ─────────────
 var DEFAULT_THRESHOLD_STRONG = 4.0;
 var DEFAULT_THRESHOLD_STABLE = 3.5;
@@ -103,6 +121,11 @@ function setSendToSlackApproved_(approved) {
 // ── Main endpoint ─────────────────────────────────────────────────────────────
 function doGet(e) {
   try {
+    var providedSecret = String((e && e.parameter && e.parameter.secret) || "").trim();
+    if (!isAuthorized_(providedSecret)) {
+      return unauthorizedResponse_();
+    }
+
     var action = String((e && e.parameter && e.parameter.action) || "").trim();
     if (action === "getAiInsight") {
       var cycleParam = String((e && e.parameter && e.parameter.cycle) || "").trim();
@@ -996,6 +1019,10 @@ function doPost(e) {
     var payload = {};
     if (e && e.postData && e.postData.contents) {
       payload = JSON.parse(e.postData.contents);
+    }
+
+    if (!isAuthorized_(payload.secret)) {
+      return unauthorizedResponse_();
     }
 
     var action = String(payload.action || "").trim();

@@ -29,6 +29,7 @@ type StoredInsightEnvelope = {
 };
 
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
+const APPS_SCRIPT_SECRET = process.env.APPS_SCRIPT_SECRET;
 
 function buildDataFingerprint(payload: {
   cycle: unknown;
@@ -55,6 +56,7 @@ async function fetchStoredInsight(cycle: string) {
   const url = new URL(APPS_SCRIPT_URL);
   url.searchParams.set("action", "getAiInsight");
   url.searchParams.set("cycle", cycle);
+  if (APPS_SCRIPT_SECRET) url.searchParams.set("secret", APPS_SCRIPT_SECRET);
 
   try {
     const res = await fetch(url.toString(), { cache: "no-store" });
@@ -109,6 +111,7 @@ async function persistInsight(args: {
         dataFingerprint: args.dataFingerprint,
         generatedBy: args.generatedBy,
         force: args.force,
+        secret: APPS_SCRIPT_SECRET,
       }),
     });
     if (!res.ok) return null;
