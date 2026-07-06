@@ -18,7 +18,7 @@ export interface DashboardFetchResult {
   error: DashboardFetchError | null;
 }
 
-function scoreToOverallStatus(score: number): string {
+export function scoreToOverallStatus(score: number): string {
   // Keep UI status consistent with the displayed hero score.
   if (score >= 4.0) return "Strong";
   if (score >= 3.5) return "Stable";
@@ -26,7 +26,7 @@ function scoreToOverallStatus(score: number): string {
   return "At Risk";
 }
 
-function normalizeTrendList(raw: unknown): TrendPoint[] {
+export function normalizeTrendList(raw: unknown): TrendPoint[] {
   if (!Array.isArray(raw)) return [];
 
   return raw
@@ -39,7 +39,7 @@ function normalizeTrendList(raw: unknown): TrendPoint[] {
     .filter((t) => t.cycle.length > 0 && t.overallScore > 0);
 }
 
-function hasUsablePulseHistory(trends: TrendPoint[]): boolean {
+export function hasUsablePulseHistory(trends: TrendPoint[]): boolean {
   if (trends.length < 2) return false;
   return trends.every((t) => !/unknown/i.test(String(t.cycle || "")));
 }
@@ -49,9 +49,7 @@ export async function fetchDashboardData(): Promise<DashboardFetchResult> {
   const secret = process.env.APPS_SCRIPT_SECRET;
   const isDev = process.env.NODE_ENV !== "production";
   const requestTimeoutMs = 30000;
-  // Page uses `dynamic = "force-dynamic"`, so per-request caching is intentionally
-  // off. `no-store` here documents that behaviour explicitly (was previously
-  // `revalidate: 300` which never took effect and was misleading).
+  // The page is force-dynamic, so responses are never cached.
   const nextCacheOptions = { cache: "no-store" } as const;
 
   if (!baseUrl) {
@@ -64,14 +62,13 @@ export async function fetchDashboardData(): Promise<DashboardFetchResult> {
     };
   }
 
-  // Warn (loudly) when the shared secret is missing in production so operators
-  // notice the fail-closed condition instead of silently deploying an endpoint
-  // that will reject every request.
+  // Warn when the shared secret is missing in production; the endpoint will
+  // reject every request until it is set.
   if (!isDev && !secret) {
     console.warn(
       "[fetchDashboardData] APPS_SCRIPT_SECRET is not set. The Apps Script " +
-        "endpoint will reject all requests (fail-closed) until this matches " +
-        "the API_SHARED_SECRET Script Property in Apps Script."
+        "endpoint will reject all requests until this matches the " +
+        "API_SHARED_SECRET Script Property in Apps Script."
     );
   }
 

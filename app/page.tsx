@@ -41,66 +41,50 @@ function GroupDivider() {
 }
 
 function NoDataState({ error }: { error: DashboardFetchError | null }) {
-  const title = "Live Data Is Unavailable";
-
-  const message = error?.code === "MISSING_URL"
-    ? "Set the Apps Script endpoint in your environment variables so the dashboard can load live pulse data."
+  const title = "We Couldn't Load the Dashboard Right Now";
+  const errorRef = error?.code
+    ? `REF-${error.code}`
+    : "REF-UNKNOWN";
+  const friendlyErrorLabel = error?.code === "NON_JSON_RESPONSE"
+    ? "Service Access Issue"
+    : error?.code === "MISSING_URL"
+    ? "Setup Configuration Needed"
     : error?.code === "HTTP_ERROR"
-    ? "The Apps Script endpoint returned an error response."
-    : error?.code === "NON_JSON_RESPONSE"
-    ? "The endpoint did not return JSON. This usually means deployment access is restricted or the URL is incorrect."
+    ? "Service Temporarily Unavailable"
     : error?.code === "INVALID_PAYLOAD"
-    ? "The endpoint returned data, but required dashboard fields were missing."
-    : "The dashboard could not reach the Apps Script endpoint.";
-
-  const showEnvHint = error?.code === "MISSING_URL";
+    ? "Data Format Issue"
+    : error?.code === "NETWORK_ERROR"
+    ? "Network Connection Issue"
+    : "Unexpected Service Issue";
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-8">
-      <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-[0_8px_30px_rgba(2,6,23,0.06)]">
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2">{title}</h1>
-        <p className="text-slate-600 mb-1">The dashboard is temporarily showing no live survey data.</p>
-        <p className="text-slate-500 text-sm mb-4">Most issues are endpoint URL, access settings, or environment config.</p>
-
-        <p className="text-slate-600 mb-4">{message}</p>
-
-        {error?.details && (
-          <p className="mb-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-            Details: {error.details}
-          </p>
-        )}
-
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-5">
-          <p className="text-sm font-semibold text-slate-800 mb-2">Quick Checklist</p>
-          <ul className="space-y-1.5 text-sm text-slate-600 list-disc pl-5">
-            <li>Confirm APPS_SCRIPT_URL is set in your environment.</li>
-            <li>Verify the Apps Script web app URL points to the latest endpoint.</li>
-            <li>Check deployment access is set to Anyone with the link (or org-wide as intended).</li>
-            <li>Test the URL directly and confirm it returns JSON, not a login page.</li>
-          </ul>
-        </div>
-
-        {showEnvHint && (
-          <div className="text-sm text-slate-500 font-mono bg-slate-100 p-3 rounded mb-5 inline-block">
-            Set APPS_SCRIPT_URL in .env.local
+      <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white px-6 py-7 sm:px-8 sm:py-9 shadow-[0_8px_30px_rgba(2,6,23,0.06)]">
+        <div className="flex flex-col items-center text-center">
+          <div className="mb-5 inline-flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700">
+            <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+              <path d="M6.5 17.5h10a3.5 3.5 0 0 0 .2-7A5 5 0 0 0 7 9.6a4 4 0 0 0-.5 7.9Z" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="m5 5 14 14" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </div>
-        )}
 
-        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 mb-4">{title}</h1>
+
+          <p className="text-slate-600 mb-6 leading-relaxed">
+            We&apos;re having trouble connecting to our servers.
+            <br />
+            Please check your connection and try again.
+          </p>
+
           <Link
             href="/"
-            className="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            className="inline-flex items-center rounded-lg bg-indigo-600 px-8 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
           >
-            Retry Loading
+            Retry
           </Link>
-          <a
-            href="https://developers.google.com/apps-script/guides/web"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Apps Script Web App Guide
-          </a>
+
+          <p className="mt-5 text-sm font-medium text-slate-600">{friendlyErrorLabel}</p>
+          <p className="mt-1 text-xs text-slate-400">Error Code: {errorRef}</p>
         </div>
       </div>
     </div>

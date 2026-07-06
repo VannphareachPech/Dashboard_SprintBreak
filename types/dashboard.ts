@@ -1,6 +1,4 @@
-// ─── Types matching the Apps Script JSON response ──────────────────────────
-// Every field maps 1-to-1 with what doGet() returns from Google Sheets.
-// Frontend does NOT calculate anything — it only renders what it receives.
+// Types matching the Apps Script JSON response. The frontend renders these as-is.
 
 export interface AreaScore {
   area: string;
@@ -73,7 +71,7 @@ export interface DashboardData {
   comments?: string[];                  // open-text recommendations from column K (current cycle, filtered)
 }
 
-// ── Role Split ────────────────────────────────────────────────────────────────
+// Role Split
 // One row per survey area, with a score per role group and computed gap.
 export interface RoleSplitRow {
   area: string;
@@ -81,13 +79,13 @@ export interface RoleSplitRow {
   roleGap: number;                 // max score minus min score across groups
 }
 
-// ── Response Counts ───────────────────────────────────────────────────────────
+// Response Counts
 export interface ResponseCountPoint {
   cycle: string;          // pulse label e.g. "Jun '26"
   responseCount: number;
 }
 
-// ── Current Pulse Response Mix ───────────────────────────────────────────────
+// Current Pulse Response Mix
 export interface ResponseMixRow {
   area: string;
   positive: number; // percent (0..100)

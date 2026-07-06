@@ -37,7 +37,7 @@ export default function ResponseMixChart({ data }: Props) {
   return (
     <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] border border-slate-100 p-5">
 
-      {/* ── Header ─────────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex items-center justify-between gap-3 mb-3">
         <div>
           <h3 className="text-lg font-semibold text-slate-700">Sentiment Breakdown by Area</h3>
@@ -61,7 +61,7 @@ export default function ResponseMixChart({ data }: Props) {
         </div>
       </div>
 
-      {/* ── Rows ───────────────────────────────────────────────── */}
+      {/* Rows */}
       <div className="space-y-3">
         {sorted.map((row) => {
           const level = getSentiment(row.positive);

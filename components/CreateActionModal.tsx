@@ -56,6 +56,7 @@ export default function CreateActionModal({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm(initialValues ? {
         area: (initialValues.area as FocusArea | "") ?? "",
         suggestedAction: initialValues.suggestedAction,

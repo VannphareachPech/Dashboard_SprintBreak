@@ -9,10 +9,6 @@ interface FocusAreaProps {
   previousScore?: number;
 }
 
-function focusAccent() {
-  return "border-amber-400 bg-amber-50/45";
-}
-
 function scoreTextColor() {
   return "text-amber-700";
 }
@@ -24,26 +20,16 @@ export default function FocusArea({
   pulsesAtRisk,
   areaRank,
   totalAreas,
-  gapFromOverall,
   previousScore,
 }: FocusAreaProps) {
-  var hasPrevious = typeof previousScore === "number" && !Number.isNaN(previousScore);
-  var trendDelta = hasPrevious ? Math.round((score - (previousScore as number)) * 10) / 10 : undefined;
-
-  var gapLabel = "On par with overall";
-  if (typeof gapFromOverall === "number" && !Number.isNaN(gapFromOverall)) {
-    if (gapFromOverall < 0) {
-      gapLabel = `${Math.abs(gapFromOverall).toFixed(1)} below overall`;
-    } else if (gapFromOverall > 0) {
-      gapLabel = `+${gapFromOverall.toFixed(1)} above overall`;
-    }
-  }
+  const hasPrevious = typeof previousScore === "number" && !Number.isNaN(previousScore);
+  const trendDelta = hasPrevious ? Math.round((score - (previousScore as number)) * 10) / 10 : undefined;
 
   return (
     <div className="bg-amber-50/45 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] border border-amber-100 border-l-4 border-l-amber-400 overflow-hidden">
       <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-amber-200">
 
-        {/* ── Left: Score ── */}
+        {/* Left: score */}
         <div className="w-48 shrink-0 px-5 py-5 flex flex-col justify-between gap-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
             Focus This Pulse
@@ -71,7 +57,7 @@ export default function FocusArea({
           </div>
         </div>
 
-        {/* ── Right: Area + Action ── */}
+        {/* Right: area + action */}
         <div className="flex-1 px-5 py-5 flex flex-col gap-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
             Focus Area

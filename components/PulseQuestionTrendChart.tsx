@@ -183,8 +183,29 @@ export default function PulseQuestionTrendChart({ trends }: Props) {
                 stroke={s.color}
                 strokeWidth={dimmed ? 1 : 2}
                 strokeOpacity={dimmed ? 0.15 : 1}
-                dot={(props: any) => <CustomDot key={`${s.key}-${props.cx}-${props.cy}`} {...props} dataKey={s.key} color={s.color} />}
-                activeDot={(props: any) => <ActiveDot key={`active-${s.key}`} {...props} dataKey={s.key} color={s.color} />}
+                dot={(props: Record<string, unknown>) => (
+                  <CustomDot
+                    key={`${s.key}-${String(props.cx)}-${String(props.cy)}`}
+                    cx={props.cx as number}
+                    cy={props.cy as number}
+                    payload={props.payload as Record<string, number | string>}
+                    dataKey={s.key}
+                    color={s.color}
+                  />
+                )}
+                activeDot={(props: unknown) => {
+                  const p = props as { cx?: number; cy?: number; payload?: Record<string, number | string> };
+                  return (
+                    <ActiveDot
+                      key={`active-${s.key}`}
+                      cx={p.cx as number}
+                      cy={p.cy as number}
+                      payload={p.payload as Record<string, number | string>}
+                      dataKey={s.key}
+                      color={s.color}
+                    />
+                  );
+                }}
               />
             );
           })}

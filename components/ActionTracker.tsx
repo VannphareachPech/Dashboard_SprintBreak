@@ -5,9 +5,8 @@ import { Edit2, Pin, Trash2 } from "lucide-react";
 import type { ActionItem, ActionStatus } from "@/types/dashboard";
 import CreateActionModal from "./CreateActionModal";
 
-// Single cache key — full canonical list, hydrated from server on mount.
-// Bump the version suffix when the ActionItem shape changes so stale data
-// is silently discarded on next load.
+// Cache key for the actions list. Bump the version when ActionItem changes
+// so stale cached data is discarded.
 const LS_KEY = "b2css_actions_cache_v1";
 
 function actionKey(a: ActionItem) {
@@ -43,8 +42,8 @@ export default function ActionTracker({ actions, currentCycle }: ActionTrackerPr
   const [justPinnedId, setJustPinnedId] = useState<string | null>(null);
   const rowsContainerRef = useRef<HTMLTableSectionElement>(null);
 
-  // ── Single canonical list — always start from server props to match SSR ──────
-  // localStorage hydration is deferred to useEffect so server/client render match.
+  // Start from server props so SSR and client render match; localStorage
+  // hydration happens later in an effect.
   const [allActions, setAllActions] = useState<ActionItem[]>(() => {
     if (actions.length > 0) return actions;
     if (typeof window === "undefined") return actions;
@@ -57,7 +56,7 @@ export default function ActionTracker({ actions, currentCycle }: ActionTrackerPr
     }
   });
 
-  // Persist canonical list to localStorage as fast-paint cache.
+  // Persist the list to localStorage for a faster initial paint.
   useEffect(() => {
     try { localStorage.setItem(LS_KEY, JSON.stringify(allActions)); } catch { /* silent */ }
   }, [allActions]);
@@ -77,7 +76,7 @@ export default function ActionTracker({ actions, currentCycle }: ActionTrackerPr
         const data = await res.json() as { ok?: boolean; actions?: ActionItem[] };
         if (canceled || !data.ok || !Array.isArray(data.actions)) return;
         if (data.actions.length > 0) setAllActions(data.actions);
-      } catch { /* best-effort; cached state remains */ }
+      } catch { /* keep cached state on failure */ }
     })();
     return () => { canceled = true; };
   }, []);
@@ -109,7 +108,7 @@ export default function ActionTracker({ actions, currentCycle }: ActionTrackerPr
     });
   }, [newActionId]);
 
-  // ── Single canonical row list — sorted pinned-first ────────────────────────
+  // Rows sorted pinned-first.
   const allRows = allActions.map((a, idx) => ({
     id: `r-${idx}-${actionKey(a)}`,
     action: a,

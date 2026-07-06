@@ -6,6 +6,8 @@ import type { SummaryData, AreaScore, TrendPoint, RecommendationTheme, RoleSplit
 
 type Priority = "High" | "Medium" | "Low";
 
+// Retained for quick rollback if leadership wants the Priority column back.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const PRIORITY_STYLES: Record<Priority, string> = {
   High:   "bg-rose-50 text-rose-700 ring-rose-200",
   Medium: "bg-amber-50 text-amber-700 ring-amber-200",
@@ -108,6 +110,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
 
   useEffect(() => {
     if (!loading) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoadingSeconds(0);
       return;
     }
@@ -138,6 +141,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
         const parsed = JSON.parse(cached);
         if (isGeminiInsightsResponse(parsed)) {
           if (!canceled) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setResult(parsed);
             setHasExistingInsight(true);
           }
@@ -166,7 +170,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
         setHasExistingInsight(true);
         try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch { /* ignore */ }
       } catch {
-        // Best-effort load; local cache remains fallback.
+        // Ignore; cached data remains as the fallback.
       }
     })();
 
@@ -177,7 +181,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
       }
       canceled = true;
     };
-  }, [cacheKey]);
+  }, [cacheKey, cycle]);
 
   // Tick the cooldown counter down every second
   const startCooldown = (seconds: number) => {
@@ -210,7 +214,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
     setDailyQuotaExhausted(false);
 
     try {
-      let res = await fetch("/api/gemini-insights", {
+      const res = await fetch("/api/gemini-insights", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -227,7 +231,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
         }),
       });
 
-      let data = await res.json();
+      const data = await res.json();
 
       if (!res.ok || data.error) {
         setError(data.error ?? "Unexpected error from Gemini API.");
@@ -253,8 +257,8 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
         // Persist to localStorage so server restarts don't force a re-call
         try { localStorage.setItem(cacheKey, JSON.stringify(insights)); } catch { /* quota full */ }
       }
-    } catch (err: any) {
-      setError(err.message ?? "Network error.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Network error.");
     } finally {
       setLoading(false);
     }
@@ -263,7 +267,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
   return (
     <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] border border-slate-100 p-5 space-y-5">
 
-      {/* ── Header + Button ────────────────────────── */}
+      {/* Header + button */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h3 className="text-lg font-semibold text-slate-700">AI-Generated Insights</h3>
@@ -331,7 +335,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
         </div>
       )}
 
-      {/* ── Error ─────────────────────────────────── */}
+      {/* Error */}
       {error && (
         <div
           className={`rounded-lg border px-4 py-3 text-sm space-y-1 ${
@@ -354,7 +358,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
         </div>
       )}
 
-      {/* ── Table ─────────────────────────────────── */}
+      {/* Table */}
       {Array.isArray(result?.rows) && result.rows.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
@@ -406,7 +410,7 @@ export default function GeminiInsights({ cycle, summary, areaScores, trends, rec
         </div>
       )}
 
-      {/* ── Empty state before first click ────────── */}
+      {/* Empty state before first generation */}
       {!result && !loading && !error && (
         <p className="text-sm text-slate-400 text-center py-6">
           Click <span className="font-medium text-slate-600">Generate Insights</span> to analyse this pulse with Gemini.

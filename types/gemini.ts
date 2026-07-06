@@ -3,10 +3,8 @@ export interface GeminiInsightRow {
   insight: string;
   recommendation: string;
   priority?: "High" | "Medium" | "Low";
-  // Number of employee comments that were code-verified as raising this same
-  // concern (via similarity clustering, not model guesswork). Omitted when the
-  // insight is grounded in structured data (scores/role gaps) rather than a
-  // repeated comment cluster.
+  // Number of comments raising this same concern (from similarity clustering).
+  // Omitted when the insight comes from score data rather than repeated comments.
   mentionCount?: number;
 }
 

@@ -180,7 +180,7 @@ export default function TrendChart({ trends, events = {} }: TrendChartProps) {
                 />
               );
             }}
-            activeDot={(props: any) => {
+            activeDot={(props: unknown) => {
               const { cx, cy, payload } = props as { cx: number; cy: number; payload: TrendPoint };
               const fill = dotColor(payload.overallScore);
               return (

@@ -41,7 +41,7 @@ export default function RoleSplitHeatmap({ rows }: Props) {
   return (
     <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] border border-slate-100 overflow-hidden">
 
-      {/* ── Header + inline legend ──────────────────────────────── */}
+      {/* Header + legend */}
       <div className="px-6 py-4 border-b border-slate-200/70 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2.5">
         <div>
           <h3 className="text-lg font-semibold text-slate-700">Score by Role Group</h3>
@@ -64,7 +64,7 @@ export default function RoleSplitHeatmap({ rows }: Props) {
         </div>
       </div>
 
-      {/* ── Table ───────────────────────────────────────────────── */}
+      {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full table-fixed text-base">
           <colgroup>

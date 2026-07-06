@@ -3,9 +3,7 @@ import type { ActionItem } from "@/types/dashboard";
 
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 
-// Same-origin check for write endpoints. Blocks POST/PUT/DELETE from external
-// origins (curl, other sites, etc.). Sized for a small internal tool — not a
-// substitute for real auth, but stops random internet writes.
+// Reject cross-origin writes.
 function isSameOrigin(req: NextRequest): boolean {
   const host = req.headers.get("host");
   if (!host) return false;
@@ -33,17 +31,16 @@ function isSameOrigin(req: NextRequest): boolean {
   return false;
 }
 
-// Whitelist of fields the client is allowed to send — prevents field injection.
+// Fields the client is allowed to send.
 const ALLOWED_ACTION_FIELDS = new Set([
   "area", "suggestedAction", "owner", "status", "notes", "isPinned",
   "pulseOpened", "id", "originalSuggestedAction", "originalOwner", "originalArea",
 ]);
 
-// Allowed status values — "Deleted" is a server-only sentinel and MUST NOT
-// be settable via the update endpoint (delete endpoint owns it).
+// Valid statuses. "Deleted" is set only by the DELETE endpoint.
 const ALLOWED_STATUS_VALUES = new Set(["Planned", "In Progress", "Completed"]);
 
-// Per-field length caps to prevent sheet cell overflow and prompt bloat.
+// Max length per field.
 const FIELD_MAX_LEN: Record<string, number> = {
   area: 120,
   suggestedAction: 1000,
@@ -97,7 +94,7 @@ function sanitizeBody(raw: Record<string, unknown>, opts: { allowDeletedStatus?:
 
 async function proxyPost(body: Record<string, unknown>) {
   if (!APPS_SCRIPT_URL) return NextResponse.json({ error: "Not configured" }, { status: 500 });
-  // Attach shared secret so the Apps Script auth check passes (fail-closed).
+  // Attach the shared secret for the Apps Script auth check.
   const secret = process.env.APPS_SCRIPT_SECRET;
   const bodyWithSecret = secret ? { ...body, secret } : body;
   try {
@@ -154,8 +151,7 @@ export async function PUT(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  // Update path must never accept "Deleted" — that's a soft-delete sentinel
-  // owned by the DELETE endpoint.
+  // The update path never accepts "Deleted"; that status is handled by DELETE.
   const result = sanitizeBody(raw, { allowDeletedStatus: false });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return proxyPost({ action: "updateAction", ...result.data });

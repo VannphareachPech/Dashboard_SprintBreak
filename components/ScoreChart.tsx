@@ -10,7 +10,6 @@ import {
   ResponsiveContainer,
   Cell,
   LabelList,
-  ReferenceLine,
 } from "recharts";
 import type { AreaScore } from "@/types/dashboard";
 

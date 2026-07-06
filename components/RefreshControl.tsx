@@ -12,6 +12,7 @@ export default function RefreshControl() {
   const wasPending = useRef(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadedAt(
       new Date().toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })
     );

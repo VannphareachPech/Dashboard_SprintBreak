@@ -1,6 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import type { GeminiInsightsResponse } from "@/types/gemini";
+import type { SummaryData } from "@/types/dashboard";
+import {
+  classifyDelta,
+  classifyPriorityBand,
+  clusterSimilarComments,
+  sanitizeMentionCount,
+} from "@/lib/insights";
+
+// Reject cross-origin POSTs so only the dashboard can trigger generation.
+function isSameOrigin(req: NextRequest): boolean {
+  const host = req.headers.get("host");
+  if (!host) return false;
+
+  const origin = req.headers.get("origin");
+  if (origin) {
+    try {
+      return new URL(origin).host === host;
+    } catch {
+      return false;
+    }
+  }
+
+  // Some browsers omit Origin on same-origin requests; fall back to Referer.
+  const referer = req.headers.get("referer");
+  if (referer) {
+    try {
+      return new URL(referer).host === host;
+    } catch {
+      return false;
+    }
+  }
+
+  // No Origin and no Referer — reject to be safe.
+  return false;
+}
 
 type RoleSplitRowLike = {
   area?: string;
@@ -185,92 +220,11 @@ export async function GET(req: NextRequest) {
   });
 }
 
-function classifyDelta(delta: unknown) {
-  if (typeof delta !== "number" || !Number.isFinite(delta)) return "unknown";
-  if (delta <= -0.2) return "declining";
-  if (delta >= 0.2) return "improving";
-  if (delta > -0.1 && delta < 0.1) return "stable";
-  return delta < 0 ? "softening" : "rising";
-}
-
-function classifyPriorityBand(score: unknown, pulsesAtRisk: unknown) {
-  const safeScore = typeof score === "number" && Number.isFinite(score) ? score : null;
-  const safeRisk = typeof pulsesAtRisk === "number" && Number.isFinite(pulsesAtRisk) ? pulsesAtRisk : 0;
-
-  if ((safeScore != null && safeScore < 3.5) || safeRisk >= 2) return "critical";
-  if (safeScore != null && safeScore < 4) return "watch";
-  return "strong";
-}
-
-// ── Comment similarity clustering (code-verified, not model-guessed) ────────
-// Groups near-duplicate comments so we can tell Gemini exactly how many real
-// employees raised the same concern. Nothing is discarded — every comment is
-// still sent to the model; this only adds a verified count on top.
-const CLUSTER_STOPWORDS = new Set([
-  "the", "and", "for", "are", "but", "not", "you", "with", "have", "this",
-  "that", "our", "your", "from", "more", "some", "all", "can", "will", "would",
-  "should", "could", "into", "than", "when", "what", "how", "also", "just",
-  "get", "got", "very", "much", "many", "them", "they", "their", "there",
-  "been", "being", "was", "were", "its", "it's", "a", "an", "to", "of", "in",
-  "on", "is", "as", "at", "by", "we", "us", "i", "my",
-]);
-
-function tokenizeForClustering(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w.length > 2 && !CLUSTER_STOPWORDS.has(w))
-  );
-}
-
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let intersection = 0;
-  for (const w of a) if (b.has(w)) intersection++;
-  const union = a.size + b.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
-
-const CLUSTER_SIMILARITY_THRESHOLD = 0.35;
-
-interface CommentCluster {
-  representative: string;
-  count: number;
-}
-
-function clusterSimilarComments(comments: string[]): CommentCluster[] {
-  const tokenSets = comments.map(tokenizeForClustering);
-  const used = new Array(comments.length).fill(false);
-  const clusters: CommentCluster[] = [];
-
-  for (let i = 0; i < comments.length; i++) {
-    if (used[i]) continue;
-    used[i] = true;
-    const memberIndexes = [i];
-    for (let j = i + 1; j < comments.length; j++) {
-      if (used[j]) continue;
-      if (jaccardSimilarity(tokenSets[i], tokenSets[j]) >= CLUSTER_SIMILARITY_THRESHOLD) {
-        used[j] = true;
-        memberIndexes.push(j);
-      }
-    }
-    // Representative = longest comment in the cluster (most descriptive).
-    const representative = memberIndexes
-      .map((idx) => comments[idx])
-      .sort((a, b) => b.length - a.length)[0];
-    clusters.push({ representative, count: memberIndexes.length });
-  }
-
-  return clusters;
-}
-
-// ── In-memory cache — keyed by cycle label ────────────────────────────────────
+// Cache generated insights per cycle.
 const responseCache = new Map<string, GeminiInsightsResponse>();
 const RESPONSE_CACHE_MAX = 50;
 function setResponseCache(key: string, value: GeminiInsightsResponse) {
-  // Simple FIFO eviction to prevent unbounded growth in long-lived server instances.
+  // Evict the oldest entry when the cache is full.
   if (responseCache.size >= RESPONSE_CACHE_MAX) {
     const oldest = responseCache.keys().next().value;
     if (oldest !== undefined) responseCache.delete(oldest);
@@ -278,15 +232,24 @@ function setResponseCache(key: string, value: GeminiInsightsResponse) {
   responseCache.set(key, value);
 }
 
-// ── Per-IP rate limiter (max 1 Gemini call per 30 s, forced regeneration exempt) ──
+// Limit each IP to one Gemini call per 30 seconds (forced regeneration is exempt).
 const rateLimitMap = new Map<string, number>();
 const RATE_LIMIT_MS = 30_000;
 
-// Upstream Gemini call timeout — prevents dashboard from hanging on a stuck request.
 const GEMINI_TIMEOUT_MS = 45_000;
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  if (!isSameOrigin(req)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const {
     cycle,
     summary,
@@ -297,7 +260,17 @@ export async function POST(req: NextRequest) {
     comments,
     forceRegenerate,
     generatedBy,
-  } = body;
+  } = body as {
+    cycle?: string;
+    summary: SummaryData;
+    areaScores?: unknown;
+    trends?: unknown;
+    recommendations?: unknown;
+    roleSplit?: unknown;
+    comments?: unknown;
+    forceRegenerate?: unknown;
+    generatedBy?: unknown;
+  };
 
   const force = Boolean(forceRegenerate);
   const fingerprint = buildDataFingerprint({ cycle, summary, areaScores, trends, recommendations, roleSplit, comments });
@@ -446,12 +419,10 @@ export async function POST(req: NextRequest) {
 
   const roleSplitLines = roleHotspots.map((x) => x.text).join("; ");
 
-  // ── Comments block (injection-safe) ────────────────────────────────────────
-  // Comments are wrapped in hard delimiters and declared as untrusted data.
-  // The model is instructed to treat them as evidence to analyze, never as commands.
+  // Wrap comments as untrusted data so the model treats them as evidence, not instructions.
   const allComments: string[] = Array.isArray(comments) ? (comments as string[]) : [];
   const totalCommentCount = allComments.length;
-  const safeComments: string[] = allComments.slice(0, 60); // cap at 60 to stay inside token budget
+  const safeComments: string[] = allComments.slice(0, 60); // cap to keep the prompt small
   const wasTruncated = totalCommentCount > safeComments.length;
 
   const commentsBlock = safeComments.length > 0
@@ -465,9 +436,7 @@ export async function POST(req: NextRequest) {
       : ` (${safeComments.length} survey comments available)`
     : " (no survey comments available — use structured data only)";
 
-  // ── Repeated feedback signals (code-verified counts, not model-guessed) ────
-  // Clustering runs over ALL submitted comments (not just the 60-cap sent as
-  // raw text) so the counts are accurate regardless of the token-budget cap.
+  // Count repeated concerns across every comment, not just the capped sample.
   const repeatedClusters = hasComments
     ? clusterSimilarComments(allComments)
         .filter((c) => c.count >= 2)
@@ -620,8 +589,10 @@ FORMAT RULES:
 
     const geminiData = await geminiRes.json();
 
-    // Log full response in dev to diagnose format issues
-    console.log("[gemini-insights] raw response:", JSON.stringify(geminiData).slice(0, 600));
+    // Log the raw response in development only.
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[gemini-insights] raw response:", JSON.stringify(geminiData).slice(0, 600));
+    }
 
     const candidate = geminiData?.candidates?.[0];
     const finishReason: string = candidate?.finishReason ?? "";
@@ -659,9 +630,7 @@ FORMAT RULES:
       return NextResponse.json({ error: "Gemini response was malformed. Please try again." }, { status: 502 });
     }
 
-    // Deterministic sorting: verified mention count first (real repeated employee
-    // feedback outranks everything else), then breadth of role-group impact,
-    // then signal frequency, then insight name.
+    // Sort by mention count, then role-group breadth, then signal frequency, then name.
     const signalFrequencyMap = new Map<string, number>();
     safeRecommendations.forEach((rec) => {
       const key = String(rec?.theme || "").trim().toLowerCase();
@@ -675,18 +644,12 @@ FORMAT RULES:
         .map((s) => s.trim())
         .filter(Boolean).length;
 
-    // Clamp mentionCount to a sane, code-verified range — never trust the model's
-    // number blindly. Anything outside the actual cluster range is dropped.
+    // Clamp mentionCount to the observed cluster range.
     const maxObservedMentionCount = repeatedClusters.length > 0 ? repeatedClusters[0].count : 0;
-    const sanitizeMentionCount = (value: unknown): number | undefined => {
-      const n = Number(value);
-      if (!Number.isFinite(n) || n < 2) return undefined;
-      return Math.min(Math.round(n), maxObservedMentionCount || Math.round(n));
-    };
 
     parsed.rows = (parsed.rows || [])
       .filter((row) => row && row.insight && row.recommendation && String(row.roleGroupsMentioning || "").trim())
-      .map((row) => ({ ...row, mentionCount: sanitizeMentionCount(row.mentionCount) }))
+      .map((row) => ({ ...row, mentionCount: sanitizeMentionCount(row.mentionCount, maxObservedMentionCount) }))
       .sort((a, b) => {
         const aMentions = a.mentionCount ?? 0;
         const bMentions = b.mentionCount ?? 0;

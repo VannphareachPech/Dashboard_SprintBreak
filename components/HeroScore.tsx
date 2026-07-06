@@ -11,9 +11,10 @@ function boldAreas(sentence: string, areaNames: string[]): React.ReactNode {
   );
 }
 
-// ── Splits the narrative string into its natural sentences and renders
-//    the first as a headline, the rest as labelled signal pills.
-function NarrativePills({ text, areaNames }: { text: string; areaNames: string[] }) {  if (!text) return null;  // Split on sentence boundaries — each sentence is a distinct signal.
+// Splits the narrative into sentences: the first is the headline, the rest become signal pills.
+function NarrativePills({ text, areaNames }: { text: string; areaNames: string[] }) {
+  if (!text) return null;
+
   const sentences = text
     .split(/(?<=\.)\s+/)
     .map((s) => s.trim())
@@ -96,7 +97,7 @@ export default function HeroScore({ summary, prevCycle, narrativeSummary }: Hero
     <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] border border-slate-100 border-l-4 border-l-indigo-500 overflow-hidden">
       <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-slate-100">
 
-        {/* ── Left: Overall Sentiment ── */}
+        {/* Left: overall sentiment */}
         <div className="w-48 shrink-0 px-5 py-5 flex flex-col justify-between gap-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
             Overall Sentiment
@@ -138,7 +139,7 @@ export default function HeroScore({ summary, prevCycle, narrativeSummary }: Hero
           </div>
         </div>
 
-        {/* ── Right: Leadership Readout ── */}
+        {/* Right: leadership readout */}
         <div className="flex-1 px-5 py-5 flex flex-col gap-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
             Leadership Readout
