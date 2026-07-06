@@ -87,6 +87,10 @@ export async function fetchDashboardData(): Promise<DashboardData | null> {
     const resolvedStatus = scoreToOverallStatus(resolvedScore);
 
     if (!data.summary || !Array.isArray(data.areaScores) || data.areaScores.length === 0) {
+      console.error(
+        "Apps Script returned JSON but summary/areaScores are missing or empty. Raw response preview:",
+        raw.slice(0, 500)
+      );
       return null;
     }
 
